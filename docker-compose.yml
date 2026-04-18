@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: hooksink
+      POSTGRES_PASSWORD: hooksink_password
+      POSTGRES_DB: hooksink_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - internal
+      
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:3002:3002"
+    environment:
+      - DATABASE_URL=postgresql://hooksink:hooksink_password@db:5432/hooksink_db?schema=public
+      - MAX_BODY_SIZE=5mb
+      - API_PORT=3000
+      - INGRESS_PORT=3001
+      - METRICS_PORT=3002
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - OIDC_SESSION_SECRET=${OIDC_SESSION_SECRET}
+      - OIDC_BASE_URL=${OIDC_BASE_URL}
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - internal
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: unless-stopped
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+    driver: bridge

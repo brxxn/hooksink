@@ -1,0 +1,43 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model RequestLog {
+  id        String   @id @default(uuid())
+  method    String
+  path      String
+  headers   Json
+  bodyType  BodyType
+  body      Bytes?   @db.ByteA
+  query     Json?
+  createdAt DateTime @default(now())
+}
+
+model DynamicRoute {
+  id              String      @id @default(uuid())
+  path            String      
+  isRegex         Boolean     @default(false)
+  handlerType     HandlerType
+  content         String      @db.Text
+  fileData        Bytes?      @db.ByteA
+  responseHeaders Json?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+enum BodyType {
+  TEXT
+  JSON
+  BINARY
+}
+
+enum HandlerType {
+  JAVASCRIPT
+  STATIC
+}

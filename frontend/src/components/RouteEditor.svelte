@@ -39,6 +39,31 @@ response = {
   let headerValue = '';
   let responseHeaders: Record<string, string> = {};
 
+  let staticTab: 'text' | 'file' | 'headers' = 'text';
+
+  $: if (fileData && staticTab === 'text') {
+    staticTab = 'file';
+  }
+
+  $: if (handlerType === 'STATIC' && editorContent === DEFAULT_JS) {
+    editorContent = '';
+  }
+
+  $: if (handlerType === 'JAVASCRIPT' && editorContent === '') {
+    editorContent = DEFAULT_JS;
+  }
+
+  function getLanguage(ct: string) {
+    if (!ct) return 'plaintext';
+    ct = ct.toLowerCase();
+    if (ct.includes('json')) return 'json';
+    if (ct.includes('javascript')) return 'javascript';
+    if (ct.includes('html')) return 'html';
+    if (ct.includes('css')) return 'css';
+    if (ct.includes('xml')) return 'xml';
+    return 'plaintext';
+  }
+
   async function loadRoutes() {
     const res = await authFetch('/routes');
     if (res.ok) {
@@ -58,6 +83,24 @@ response = {
     fileData = route.fileData || null;
     responseHeaders = route.responseHeaders || {};
     fileName = route.fileData ? 'Stored File Buffer' : '';
+
+    // Automatically coerce existing text payloads out of base64
+    if (fileData) {
+      const ct = responseHeaders['Content-Type']?.toLowerCase() || '';
+      const isTextNode = ct.startsWith('text/') || ct.includes('json') || ct.includes('javascript') || ct.includes('xml');
+      if (isTextNode) {
+        try {
+          // Decode utf-8 safely
+          const binString = atob(fileData);
+          const bytes = new Uint8Array(binString.length);
+          for (let i = 0; i < binString.length; i++) bytes[i] = binString.charCodeAt(i);
+          editorContent = new TextDecoder().decode(bytes);
+          fileData = null;
+        } catch (e) {
+          console.error("Failed to decode text fileData", e);
+        }
+      }
+    }
   }
 
   function createNew() {
@@ -72,12 +115,21 @@ response = {
     responseHeaders = { 'Content-Type': 'application/json' };
   }
 
-  function monacoAction(node: HTMLElement, initialContent: string) {
+  function monacoAction(node: HTMLElement, options: { content: string, language: string }) {
     let editor: any;
     loader.init().then(monaco => {
+      // Disable syntax parsing for cleaner raw editing
+      monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true,
+      });
+      monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+        validate: false
+      });
+
       editor = monaco.editor.create(node, {
-        value: initialContent,
-        language: 'javascript',
+        value: options.content,
+        language: options.language || 'plaintext',
         theme: 'vs-dark',
         minimap: { enabled: false },
         fontFamily: 'JetBrains Mono, monospace',
@@ -92,9 +144,16 @@ response = {
     });
 
     return {
-      update(newContent: string) {
-        if (editor && editor.getValue() !== newContent) {
-          editor.setValue(newContent);
+      update(newOpts: { content: string, language: string }) {
+        if (editor) {
+          if (editor.getValue() !== newOpts.content) {
+            editor.setValue(newOpts.content);
+          }
+          if (editor.getModel()) {
+            loader.init().then(monaco => {
+              monaco.editor.setModelLanguage(editor.getModel(), newOpts.language || 'plaintext');
+            });
+          }
         }
       },
       destroy() {
@@ -135,12 +194,49 @@ response = {
     const file = e.target.files[0];
     if (!file) return;
     fileName = file.name;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const base64str = event.target?.result?.toString().split(',')[1];
-      if (base64str) fileData = base64str;
-    };
-    reader.readAsDataURL(file);
+
+    // Build Content-Type header based on file
+    let contentType = file.type;
+    if (!contentType || contentType === 'application/octet-stream') {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'txt') contentType = 'text/plain';
+      else if (ext === 'json') contentType = 'application/json';
+      else if (ext === 'js') contentType = 'application/javascript';
+      else if (ext === 'html') contentType = 'text/html';
+      else if (ext === 'csv') contentType = 'text/csv';
+      else if (ext === 'css') contentType = 'text/css';
+      else if (ext === 'xml') contentType = 'application/xml';
+      else contentType = 'application/octet-stream';
+    }
+    responseHeaders = { ...responseHeaders, 'Content-Type': contentType };
+
+    const ctLower = contentType.toLowerCase();
+    const isText = ctLower.startsWith('text/') || 
+                   ctLower.includes('application/json') || 
+                   ctLower.includes('javascript') ||
+                   ctLower.includes('application/xml');
+    
+    // Check if the file is small enough to not crash the browser (e.g. 2MB)
+    const isSmall = file.size < 2 * 1024 * 1024; 
+
+    if (isText && isSmall) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result !== undefined) {
+          editorContent = event.target.result as string;
+          fileData = null; // Important: Clear binary file data so we rely on content
+          staticTab = 'text';
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64str = event.target?.result?.toString().split(',')[1];
+        if (base64str) fileData = base64str;
+      };
+      reader.readAsDataURL(file);
+    }
   }
 
   function addHeader() {
@@ -227,43 +323,67 @@ response = {
       <!-- Main Config Canvas -->
       {#if handlerType === 'JAVASCRIPT'}
         <div class="flex-1 right-0 w-full overflow-hidden relative">
-          <div use:monacoAction={editorContent} class="absolute inset-0"></div>
+          <div use:monacoAction={{content: editorContent, language: 'javascript'}} class="absolute inset-0"></div>
         </div>
       {:else}
-        <div class="flex-1 overflow-y-auto p-6 flex flex-col gap-6 max-w-4xl mx-auto w-full">
-          <!-- File Attach -->
-          <div class="flex flex-col gap-2">
-            <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Serve File Attachment</h3>
-            <div class="border-2 border-dashed border-white/10 rounded-xl p-8 flex flex-col items-center justify-center bg-black/20 hover:bg-white/[0.02] transition-colors relative">
-              <input type="file" on:change={handleFileUpload} class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-              <svg class="w-8 h-8 text-accent mb-3 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-              <span class="text-white font-medium">{fileName || 'Drag and drop a file, or click to browse'}</span>
-              <span class="text-slate-500 text-xs mt-1">Binary will be natively buffered via PostgreSQL</span>
-            </div>
+        <div class="flex flex-col flex-1 w-full overflow-hidden border-t border-white/5">
+          <!-- Tabs -->
+          <div class="flex bg-[#18181A] px-6 shrink-0 border-b border-white/5">
+            {#if !fileData}
+              <button on:click={() => staticTab = 'text'} class="px-4 py-3 text-sm font-medium border-b-2 {staticTab === 'text' ? 'border-accent text-white' : 'border-transparent text-slate-400 hover:text-white transition-colors'}">Text Editor</button>
+            {/if}
+            <button on:click={() => staticTab = 'file'} class="px-4 py-3 text-sm font-medium border-b-2 {staticTab === 'file' ? 'border-accent text-white' : 'border-transparent text-slate-400 hover:text-white transition-colors'}">File Upload</button>
+            <button on:click={() => staticTab = 'headers'} class="px-4 py-3 text-sm font-medium border-b-2 {staticTab === 'headers' ? 'border-accent text-white' : 'border-transparent text-slate-400 hover:text-white transition-colors'}">Response Headers</button>
           </div>
 
-          <!-- Strict Headers -->
-          <div class="flex flex-col gap-2">
-            <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Forced Response Headers</h3>
-            <div class="bg-black/20 border border-white/10 rounded-xl overflow-hidden flex flex-col p-4 gap-4">
-              <div class="flex gap-2">
-                <input bind:value={headerKey} placeholder="Content-Type" class="flex-1 px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-accent" />
-                <input bind:value={headerValue} placeholder="image/png" class="flex-[2] px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-accent" />
-                <button on:click={addHeader} class="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-xs font-medium transition-colors">Add</button>
-              </div>
-              {#if Object.keys(responseHeaders).length > 0}
-                <div class="flex flex-col gap-1 mt-2">
-                  {#each Object.entries(responseHeaders) as [key, val]}
-                    <div class="flex items-center justify-between bg-black/40 border border-white/5 rounded-lg px-4 py-2 group">
-                      <span class="font-mono text-xs"><span class="text-blue-300">{key}</span>: <span class="text-green-300">{val}</span></span>
-                      <button on:click={() => removeHeader(key)} class="text-red-400/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">
-                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                      </button>
+          <div class="flex-1 overflow-hidden relative bg-[#1e1e1e]">
+            {#if staticTab === 'text'}
+               <div use:monacoAction={{content: editorContent, language: getLanguage(responseHeaders['Content-Type'])}} class="absolute inset-0 z-0"></div>
+            {:else if staticTab === 'file'}
+               <div class="p-6 max-w-4xl mx-auto w-full flex flex-col gap-6 overflow-y-auto h-full">
+                 <div class="flex flex-col gap-2">
+                   <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Serve File Attachment</h3>
+                   <div class="border-2 border-dashed border-white/10 rounded-xl p-8 flex flex-col items-center justify-center bg-black/20 hover:bg-white/[0.02] transition-colors relative">
+                     <input type="file" on:change={handleFileUpload} class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                     <svg class="w-8 h-8 text-accent mb-3 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                     <span class="text-white font-medium">{fileName || 'Drag and drop a file, or click to browse'}</span>
+                     <span class="text-slate-500 text-xs mt-1">Binary will be natively buffered via PostgreSQL</span>
+                   </div>
+                 </div>
+
+                 {#if fileData}
+                    <div class="p-4 bg-white/5 border border-white/10 rounded-lg text-sm text-slate-300 flex justify-between items-center">
+                       <span>Binary or Large File Loaded ({fileName})</span>
+                       <button type="button" on:click={() => { fileData = null; fileName = ''; }} class="px-3 py-1 bg-red-500/20 text-red-300 rounded hover:bg-red-500/30 transition-colors z-20 relative text-xs uppercase tracking-widest font-semibold">Clear</button>
                     </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
+                 {/if}
+               </div>
+            {:else if staticTab === 'headers'}
+               <div class="p-6 max-w-4xl mx-auto w-full flex flex-col gap-6 overflow-y-auto h-full">
+                 <div class="flex flex-col gap-2">
+                   <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Forced Response Headers</h3>
+                   <div class="bg-black/20 border border-white/10 rounded-xl overflow-hidden flex flex-col p-4 gap-4">
+                     <div class="flex gap-2">
+                       <input bind:value={headerKey} placeholder="Content-Type" class="flex-1 px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-accent" />
+                       <input bind:value={headerValue} placeholder="image/png" class="flex-[2] px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-accent" />
+                       <button on:click={addHeader} class="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg text-xs font-medium transition-colors">Add</button>
+                     </div>
+                     {#if Object.keys(responseHeaders).length > 0}
+                       <div class="flex flex-col gap-1 mt-2">
+                         {#each Object.entries(responseHeaders) as [key, val]}
+                           <div class="flex items-center justify-between bg-black/40 border border-white/5 rounded-lg px-4 py-2 group">
+                             <span class="font-mono text-xs"><span class="text-blue-300">{key}</span>: <span class="text-green-300">{val}</span></span>
+                             <button on:click={() => removeHeader(key)} class="text-red-400/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all">
+                               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                             </button>
+                           </div>
+                         {/each}
+                       </div>
+                     {/if}
+                   </div>
+                 </div>
+               </div>
+            {/if}
           </div>
         </div>
       {/if}

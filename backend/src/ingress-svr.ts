@@ -18,7 +18,6 @@ const MAX_WRITES_PER_MIN = 60;
 setInterval(() => { logsWrittenLastMinute = 0; }, 1000);
 
 ingressApp.all(/(.*)/, async (req, res) => {
-  ingressRequestsTotal.inc({ method: req.method, status: 'started' });
   const rawBody = req.body instanceof Buffer ? req.body : Buffer.alloc(0);
   const routePath = req.path;
 
@@ -32,10 +31,10 @@ ingressApp.all(/(.*)/, async (req, res) => {
       } else {
         if (r.path === routePath) { dynamicRoute = r; break; }
       }
-    } catch(e) { /* Ignore invalid regex */ }
+    } catch (e) { /* Ignore invalid regex */ }
   }
 
-  let responseConfig = { status: 200, headers: {} as Record<string, string>, body: '{"msg": "hook received"}' as string | Buffer };
+  let responseConfig = { status: 200, headers: {} as Record<string, string>, body: 'hi there!' as string | Buffer };
 
   if (dynamicRoute) {
     if (dynamicRoute.handlerType === 'STATIC') {
@@ -55,7 +54,7 @@ ingressApp.all(/(.*)/, async (req, res) => {
 
   // 2. Load shedding - write to DB if we're under limit
   let logId = 'dropped_due_to_load';
-  
+
   // Decide body type
   const isBinary = !req.is('application/json') && !req.is('text/*') && rawBody.length > 0;
   const bodyType = isBinary ? 'BINARY' : (req.is('application/json') ? 'JSON' : 'TEXT');
@@ -95,10 +94,10 @@ ingressApp.all(/(.*)/, async (req, res) => {
     timestamp: new Date().toISOString()
   });
 
-  ingressRequestsTotal.inc({ method: req.method, status: responseConfig.status.toString() });
+  ingressRequestsTotal.inc({ method: req.method, status: responseConfig.status.toString(), path: req.path });
 
   // 4. Send response
   res.status(responseConfig.status)
-     .set(responseConfig.headers)
-     .send(responseConfig.body);
+    .set(responseConfig.headers)
+    .send(responseConfig.body);
 });

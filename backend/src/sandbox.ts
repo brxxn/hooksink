@@ -1,33 +1,61 @@
 import vm from 'vm';
 import { vmExecutionDuration } from './metrics';
 
+const ASYNC_TIMEOUT_MS = 5000;
+
+function createSandbox(req: any) {
+  const context = vm.createContext({
+    ...globalThis,          // spreads all node globals automatically
+    require,                // not on globalThis in ESM contexts, add explicitly
+    queueMicrotask,         // same
+
+    // override/add route-specific globals
+    request: {
+      method: req.method,
+      path: req.path,
+      headers: req.headers,
+      query: req.query,
+      body: req.body,
+    },
+    response: {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"status": "ok"}',
+    },
+  });
+
+  return context;
+}
+
 export async function executeDynamicRoute(scriptContent: string, req: any) {
   const end = vmExecutionDuration.startTimer();
-  try {
-    // We isolate execution context using Node's native vm.
-    // The user administrator is trusted.
-    const context = {
-      request: {
-        method: req.method,
-        path: req.path,
-        headers: req.headers,
-        query: req.query,
-        body: req.body,
-      },
-      response: {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: '{"status": "ok"}',
-      },
-      require
-    };
 
-    vm.createContext(context);
-    
-    // Execute script synchronously
-    // In actual implementation, if await is needed inside the script, we can wrap it in an async IIFE.
-    const script = new vm.Script(scriptContent);
-    script.runInContext(context, { timeout: 1000 }); // 1s timeout
+  // Wrap user script so top-level await works and the Promise is returned
+  const wrapped = `(async () => { ${scriptContent} })()`;
+
+  let worker: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const context = createSandbox(req);
+    const script = new vm.Script(wrapped, {
+      filename: 'dynamic-route.js', // improves stack traces
+    });
+
+    // runInContext returns the async IIFE's Promise
+    const promise = script.runInContext(context, {
+      timeout: 1000, // only covers synchronous startup — guards against infinite sync loops
+    }) as Promise<void>;
+
+    // Race the async body against a wall-clock timeout
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        worker = setTimeout(
+          () => reject(new Error(`Script exceeded ${ASYNC_TIMEOUT_MS}ms async timeout`)),
+          ASYNC_TIMEOUT_MS
+        );
+      }),
+    ]);
 
     end();
     return context.response;
@@ -36,7 +64,9 @@ export async function executeDynamicRoute(scriptContent: string, req: any) {
     return {
       status: 500,
       headers: { 'Content-Type': 'text/plain' },
-      body: `Execution Error: ${err.message}`
+      body: `Execution Error: ${err.message}`,
     };
+  } finally {
+    if (worker) clearTimeout(worker);
   }
 }

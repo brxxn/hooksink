@@ -83,10 +83,18 @@ response = {
     fileData = route.fileData || null;
     responseHeaders = route.responseHeaders || {};
     fileName = route.fileData ? 'Stored File Buffer' : '';
+    staticTab = 'text';
 
     // Automatically coerce existing text payloads out of base64
     if (fileData) {
-      const ct = responseHeaders['Content-Type']?.toLowerCase() || '';
+      let ct = '';
+      for (const [k, v] of Object.entries(responseHeaders)) {
+        if (k.toLowerCase() === 'content-type' && typeof v === 'string') {
+          ct = v.toLowerCase();
+          break;
+        }
+      }
+      
       const isTextNode = ct.startsWith('text/') || ct.includes('json') || ct.includes('javascript') || ct.includes('xml');
       if (isTextNode) {
         try {
@@ -113,6 +121,7 @@ response = {
     fileData = null;
     fileName = '';
     responseHeaders = { 'Content-Type': 'application/json' };
+    staticTab = 'text';
   }
 
   function monacoAction(node: HTMLElement, options: { content: string, language: string }) {
@@ -198,14 +207,18 @@ response = {
     // Build Content-Type header based on file
     let contentType = file.type;
     if (!contentType || contentType === 'application/octet-stream') {
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      if (ext === 'txt') contentType = 'text/plain';
+      let ext = file.name.split('.').pop()?.toLowerCase();
+      if (!ext && file.name.startsWith('.')) ext = file.name.substring(1).toLowerCase();
+      
+      const pText = ['txt', 'md', 'csv', 'yaml', 'yml', 'toml', 'ini', 'sh', 'bat', 'conf', 'env', 'sql', 'gitignore'];
+      
+      if (pText.includes(ext || '')) contentType = 'text/plain';
       else if (ext === 'json') contentType = 'application/json';
-      else if (ext === 'js') contentType = 'application/javascript';
-      else if (ext === 'html') contentType = 'text/html';
-      else if (ext === 'csv') contentType = 'text/csv';
+      else if (['js', 'ts', 'jsx', 'tsx'].includes(ext || '')) contentType = 'application/javascript';
+      else if (ext === 'html' || ext === 'htm') contentType = 'text/html';
       else if (ext === 'css') contentType = 'text/css';
       else if (ext === 'xml') contentType = 'application/xml';
+      else if (ext === 'svg') contentType = 'image/svg+xml';
       else contentType = 'application/octet-stream';
     }
     responseHeaders = { ...responseHeaders, 'Content-Type': contentType };

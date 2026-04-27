@@ -3,6 +3,9 @@ import { vmExecutionDuration } from './metrics';
 
 const ASYNC_TIMEOUT_MS = 5000;
 
+// Persistent key-value store across all requests
+const persistentKVStore = new Map<string, any>();
+
 function createSandbox(req: any) {
   const context = vm.createContext({
     ...globalThis,          // spreads all node globals automatically
@@ -21,6 +24,10 @@ function createSandbox(req: any) {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
       body: '{"status": "ok"}',
+    },
+    kv: {
+      get: (key: string) => persistentKVStore.get(key),
+      set: (key: string, value: any) => persistentKVStore.set(key, value),
     },
   });
 

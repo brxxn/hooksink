@@ -28,6 +28,9 @@ function createSandbox(req: any) {
     kv: {
       get: (key: string) => persistentKVStore.get(key),
       set: (key: string, value: any) => persistentKVStore.set(key, value),
+      clear: (key: string) => persistentKVStore.delete(key),
+      list: () => Object.fromEntries(persistentKVStore),
+      eraseAllKeys: () => persistentKVStore.clear(),
     },
   });
 

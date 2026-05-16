@@ -17,6 +17,14 @@
  * - request.headers  (e.g., req.headers['content-type'])
  * - request.query    (e.g., { id: req.query.id })
  * - request.body     (e.g., '{"raw": true}') (Note: Parsed natively as a UTF-8 string)
+ * - response.status  (e.g., 200)
+ * - response.body    (e.g., '{"status": "ok"}')
+ * - response.headers (e.g., { 'Content-Type': 'application/json' })
+ * - kv.get("key")    (returns 'value')
+ * - kv.set("k", "v") (no return)
+ * - kv.clear("key")  (returns true if deleted)
+ * - kv.list()        (returns object with all keys in KV)
+ * - kv.eraseAllKeys()
  * 
  * Must modify global response object.
  */

@@ -65,3 +65,11 @@ export async function clearLogs() {
   });
   return res.json();
 }
+
+export async function deleteRoute(routeId: string) {
+  const res = await authFetch(`/routes/${routeId}`, {
+    method: 'DELETE',
+    credentials: 'include'
+  });
+  return res.json();
+}

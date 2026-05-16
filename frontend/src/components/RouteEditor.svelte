@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { authFetch } from '../lib/api';
+  import { authFetch, deleteRoute } from '../lib/api';
   import loader from '@monaco-editor/loader';
 
   let routes: any[] = [];
   let isEditing = false;
   let activeRoute: any = null;
+  let isSaving = false;
+  let saveSuccess = false;
 
   const DEFAULT_JS = `/**
  * Hooksink Sandbox Interceptor
@@ -180,6 +182,9 @@ response = {
   }
 
   async function saveRoute() {
+    isSaving = true;
+    saveSuccess = false;
+
     const payload = {
       path: routePath,
       isRegex,
@@ -192,18 +197,47 @@ response = {
     const url = activeRoute ? `/routes/${activeRoute.id}` : '/routes';
     const method = activeRoute ? 'PUT' : 'POST';
 
-    const res = await authFetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    try {
+      const res = await authFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-    if (res.ok) {
+      if (res.ok) {
+        await loadRoutes();
+        saveSuccess = true;
+        
+        // Keep the edited route selected and show success briefly
+        setTimeout(() => {
+          saveSuccess = false;
+        }, 2000);
+      } else {
+        alert('Failed to save route. Check console.');
+        console.error(await res.text());
+      }
+    } catch (e) {
+      alert('Failed to save route. Check console.');
+      console.error(e);
+    } finally {
+      isSaving = false;
+    }
+  }
+
+  async function handleDeleteRoute() {
+    if (!activeRoute) return;
+    if (!confirm(`Are you sure you want to delete the route "${activeRoute.path}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteRoute(activeRoute.id);
       await loadRoutes();
       isEditing = false;
-    } else {
-      alert('Failed to save route. Check console.');
-      console.error(await res.text());
+      activeRoute = null;
+    } catch (e) {
+      alert('Failed to delete route. Check console.');
+      console.error(e);
     }
   }
 
@@ -410,13 +444,39 @@ response = {
       {/if}
 
       <!-- Bottom Toolbar -->
-      <div class="p-4 border-t border-white/5 bg-[#141414] flex justify-end gap-3 shrink-0">
-        <button on:click={() => isEditing = false} class="px-6 py-2 rounded-lg text-slate-300 text-sm font-medium hover:bg-white/5 border border-transparent transition-colors">
-          Cancel
-        </button>
-        <button on:click={saveRoute} class="px-6 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-blue-600 transition-colors shadow-lg shadow-accent/20">
-          Save Execution Rule
-        </button>
+      <div class="p-4 border-t border-white/5 bg-[#141414] flex justify-between gap-3 shrink-0">
+        <div class="flex gap-3">
+          {#if activeRoute}
+            <button 
+              on:click={handleDeleteRoute} 
+              class="px-6 py-2 rounded-lg bg-red-500/10 text-red-400 text-sm font-medium hover:bg-red-500/20 border border-red-500/30 transition-colors"
+            >
+              Delete Route
+            </button>
+          {/if}
+        </div>
+        <div class="flex gap-3">
+          <button on:click={() => isEditing = false} disabled={isSaving} class="px-6 py-2 rounded-lg text-slate-300 text-sm font-medium hover:bg-white/5 border border-transparent transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            Cancel
+          </button>
+          <button 
+            on:click={saveRoute} 
+            disabled={isSaving}
+            class="px-6 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-blue-600 transition-colors shadow-lg shadow-accent/20 disabled:opacity-75 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {#if isSaving}
+              <div class="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+              <span>Saving...</span>
+            {:else if saveSuccess}
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span>Saved!</span>
+            {:else}
+              Save Execution Rule
+            {/if}
+          </button>
+        </div>
       </div>
     {:else}
       <div class="flex-1 flex flex-col items-center justify-center text-slate-500 gap-4">

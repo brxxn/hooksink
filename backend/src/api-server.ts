@@ -82,6 +82,13 @@ controlApp.put('/api/v1/routes/:id', async (req, res) => {
   });
 });
 
+controlApp.delete('/api/v1/routes/:id', async (req, res) => {
+  await prisma.dynamicRoute.delete({
+    where: { id: req.params.id }
+  });
+  res.json({ success: true });
+});
+
 controlApp.get('/api/v1/logs', async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 50));

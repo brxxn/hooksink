@@ -10,6 +10,7 @@
   let loadingMore = false;
   let activeLog: any = null;
   let error = '';
+  let activeLogQueryParams: Record<string, string> = {};
 
   let currentPage = 1;
   let totalPages = 1;
@@ -17,6 +18,8 @@
 
   let searchQuery = '';
   let searchTimeout: any;
+
+  $: activeLogQueryParams = activeLog ? extractQueryParams(activeLog.path) : {};
 
   function handleScroll(e: any) {
     const { scrollTop, clientHeight, scrollHeight } = e.target;
@@ -111,6 +114,20 @@
     return list[method] || 'text-gray-400';
   }
 
+  function extractQueryParams(path: string): Record<string, string> {
+    const queryIndex = path.indexOf('?');
+    if (queryIndex === -1) return {};
+    
+    const queryString = path.substring(queryIndex + 1);
+    const params: Record<string, string> = {};
+    
+    new URLSearchParams(queryString).forEach((value, key) => {
+      params[key] = value;
+    });
+    
+    return params;
+  }
+
   async function handleClearAll() {
     if (confirm("Are you sure you want to permanently clear all request logs? This cannot be undone.")) {
       loading = true;
@@ -130,9 +147,51 @@
     }
   }
 
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text);
+  }
+
+  function formatAsHttpRequest(log: any, queryParams: Record<string, string>): string {
+    // Build the request line
+    let pathWithQuery = log.path;
+    if (!pathWithQuery.includes('?') && Object.keys(queryParams).length > 0) {
+      const params = new URLSearchParams(queryParams).toString();
+      pathWithQuery = `${log.path}?${params}`;
+    }
+    
+    let httpRequest = `${log.method} ${pathWithQuery} HTTP/1.1\r\n`;
+    
+    // Add headers
+    const headers = log.headers || {};
+    for (let [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() === 'content-length' && log.body) {
+        const bodyText = typeof log.body === 'object' ? JSON.stringify(log.body, null, 2) : String(log.body);
+        value = bodyText.length.toString();
+      }
+      httpRequest += `${key}: ${value}\r\n`;
+    }
+    
+    // Add blank line before body
+    httpRequest += '\r\n';
+    
+    // Add body if present
+    if (log.body) {
+      const bodyText = typeof log.body === 'object' ? JSON.stringify(log.body, null, 2) : String(log.body);
+      httpRequest += bodyText;
+    }
+
+    
+    return httpRequest;
+  }
+
+  function copyAsHttpRequest() {
+    const httpRequest = formatAsHttpRequest(activeLog, activeLogQueryParams);
+    copyToClipboard(httpRequest);
+  }
+
   function copyBody(body: any) {
     const text = typeof body === 'object' ? JSON.stringify(body, null, 2) : String(body);
-    navigator.clipboard.writeText(text);
+    copyToClipboard(text);
   }
 
   function downloadBody(body: any, id: string) {
@@ -216,9 +275,33 @@
       </div>
     {:else}
       <!-- Header block -->
-      <div class="px-6 py-4 border-b border-white/5 bg-[#1a1a1a] flex gap-4 items-center shrink-0">
-        <span class={`font-mono text-lg font-bold ${getMethodColor(activeLog.method)}`}>{activeLog.method}</span>
-        <span class="text-slate-200 font-mono text-sm tracking-wide truncate">{activeLog.path}</span>
+      <div class="px-6 py-4 border-b border-white/5 bg-[#1a1a1a] flex gap-4 items-center justify-between shrink-0">
+        <div class="flex gap-4 items-center min-w-0 flex-1">
+          <span class={`font-mono text-lg font-bold ${getMethodColor(activeLog.method)}`}>{activeLog.method}</span>
+          <span class="text-slate-200 font-mono text-sm tracking-wide truncate flex-1">{activeLog.path}</span>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <button
+            on:click={copyAsHttpRequest}
+            title="Copy as HTTP request"
+            class="text-slate-500 hover:text-slate-300 transition-colors active:scale-95"
+            aria-label="Copy as HTTP request"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+          <button
+            on:click={() => copyToClipboard(activeLog.path)}
+            title="Copy path to clipboard"
+            class="text-slate-500 hover:text-slate-300 transition-colors active:scale-95"
+            aria-label="Copy path"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Detail Panes -->
@@ -237,14 +320,38 @@
         </div>
 
         <!-- Query Parameters -->
-        {#if activeLog?.query && Object.keys(activeLog.query).length > 0}
+        {#if activeLogQueryParams && Object.keys(activeLogQueryParams).length > 0}
           <div class="flex flex-col gap-2">
             <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Query Parameters</h3>
             <div class="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
-              {#each Object.entries(activeLog.query) as [key, val]}
-                <div class="flex border-b border-white/5 last:border-0 hover:bg-white/[0.02]">
-                  <div class="w-1/3 min-w-[200px] border-r border-white/5 px-4 py-2 font-mono text-xs text-purple-400">{key}</div>
-                  <div class="flex-1 px-4 py-2 font-mono text-xs text-slate-300 break-all">{val}</div>
+              {#each Object.entries(activeLogQueryParams) as [key, val]}
+                <div class="flex border-b border-white/5 last:border-0 hover:bg-white/[0.02] group">
+                  <div class="w-1/3 min-w-[200px] border-r border-white/5 px-4 py-2 font-mono text-xs text-purple-400 flex items-center justify-between gap-2">
+                    <span class="truncate">{key}</span>
+                    <button
+                      on:click={() => copyToClipboard(key)}
+                      title="Copy parameter name"
+                      class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-slate-600 hover:text-slate-400"
+                      aria-label="Copy parameter name"
+                    >
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="flex-1 px-4 py-2 font-mono text-xs text-slate-300 break-all flex items-center justify-between gap-2 group/value">
+                    <span>{val}</span>
+                    <button
+                      on:click={() => copyToClipboard(val)}
+                      title="Copy parameter value"
+                      class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-slate-600 hover:text-slate-400"
+                      aria-label="Copy parameter value"
+                    >
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               {/each}
             </div>
@@ -256,9 +363,33 @@
           <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest pl-1">Headers</h3>
           <div class="bg-[#141414] border border-white/10 rounded-lg overflow-hidden">
             {#each Object.entries(activeLog.headers || {}) as [key, val]}
-              <div class="flex border-b border-white/5 last:border-0 hover:bg-white/[0.02]">
-                <div class="w-1/3 min-w-[200px] border-r border-white/5 px-4 py-2 font-mono text-xs text-blue-300">{key}</div>
-                <div class="flex-1 px-4 py-2 font-mono text-xs text-slate-300 break-all">{val}</div>
+              <div class="flex border-b border-white/5 last:border-0 hover:bg-white/[0.02] group">
+                <div class="w-1/3 min-w-[200px] border-r border-white/5 px-4 py-2 font-mono text-xs text-blue-300 flex items-center justify-between gap-2">
+                  <span class="truncate">{key}</span>
+                  <button
+                    on:click={() => copyToClipboard(String(key))}
+                    title="Copy header name"
+                    class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-slate-600 hover:text-slate-400"
+                    aria-label="Copy header name"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+                <div class="flex-1 px-4 py-2 font-mono text-xs text-slate-300 break-all flex items-center justify-between gap-2">
+                  <span>{val}</span>
+                  <button
+                    on:click={() => copyToClipboard(String(val))}
+                    title="Copy header value"
+                    class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-slate-600 hover:text-slate-400"
+                    aria-label="Copy header value"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             {/each}
           </div>
